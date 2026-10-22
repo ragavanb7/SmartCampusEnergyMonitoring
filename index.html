@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Campus Energy Monitoring System</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f1f5f9;
+            color: #1e293b;
+        }
+
+        header {
+            background: linear-gradient(135deg, #102a43, #2563eb);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        header p {
+            color: #dbeafe;
+        }
+
+        main {
+            max-width: 1100px;
+            margin: 25px auto;
+            padding: 0 18px;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 18px;
+        }
+
+        .card {
+            background: white;
+            padding: 22px;
+            border-radius: 12px;
+            box-shadow: 0 3px 12px #0000000d;
+        }
+
+        .card h3 {
+            color: #64748b;
+            font-size: 15px;
+        }
+
+        .metric {
+            font-size: 28px;
+            font-weight: bold;
+            color: #2563eb;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 18px;
+            margin-top: 20px;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 12px;
+            padding: 22px;
+            box-shadow: 0 3px 12px #0000000d;
+        }
+
+        .building {
+            padding: 15px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .building-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font-weight: bold;
+        }
+
+        .bar {
+            height: 10px;
+            background: #e2e8f0;
+            border-radius: 10px;
+            margin: 12px 0;
+            overflow: hidden;
+        }
+
+        .fill {
+            height: 100%;
+            background: #2563eb;
+        }
+
+        .over {
+            background: #ef4444;
+        }
+
+        .details {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            color: #64748b;
+            font-size: 13px;
+        }
+
+        .alert {
+            background: #fff7ed;
+            border-left: 4px solid #f97316;
+            padding: 13px;
+            margin-bottom: 12px;
+            border-radius: 5px;
+        }
+
+        .success {
+            background: #ecfdf5;
+            border-left-color: #10b981;
+        }
+
+        footer {
+            text-align: center;
+            padding: 25px;
+            color: #64748b;
+            font-size: 13px;
+        }
+
+        @media (max-width: 700px) {
+            .content {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>Smart Campus Energy Monitoring System</h1>
+        <p>Monitor electricity usage, identify excess consumption,
+            and promote energy efficiency across campus.</p>
+    </header>
+
+    <main>
+        <h2>Campus Overview</h2>
+
+        <section class="summary">
+            <div class="card">
+                <h3>Total Energy Consumption</h3>
+                <div class="metric" id="total">0 kWh</div>
+            </div>
+
+            <div class="card">
+                <h3>Daily Campus Target</h3>
+                <div class="metric">300 kWh</div>
+            </div>
+
+            <div class="card">
+                <h3>Highest Consumption</h3>
+                <div class="metric" id="highest">0 kWh</div>
+                <p id="highestName"></p>
+            </div>
+
+            <div class="card">
+                <h3>Buildings Over Target</h3>
+                <div class="metric" id="overCount">0</div>
+            </div>
+        </section>
+
+        <section class="content">
+            <div class="panel">
+                <h2>Building Energy Usage</h2>
+                <div id="buildingList"></div>
+            </div>
+
+            <div class="panel">
+                <h2>Energy Alerts</h2>
+                <div id="alerts"></div>
+
+                <h2>Recommendations</h2>
+
+                <div class="alert success">
+                    Switch off unused lights and electrical equipment.
+                </div>
+
+                <div class="alert success">
+                    Monitor air-conditioning usage during non-working hours.
+                </div>
+
+                <div class="alert success">
+                    Compare energy readings regularly to identify unusual usage.
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        Smart Campus Energy Monitoring System |
+        Demonstration Dashboard
+    </footer>
+
+    <script>
+        const buildings = [
+            {
+                name: "Academic Block",
+                consumption: 125,
+                target: 110
+            },
+            {
+                name: "Library",
+                consumption: 85,
+                target: 90
+            },
+            {
+                name: "Hostel Block",
+                consumption: 145,
+                target: 120
+            }
+        ];
+
+        const total = buildings.reduce(
+            (sum, building) => sum + building.consumption, 0
+        );
+
+        const highest = buildings.reduce(
+            (a, b) => a.consumption > b.consumption ? a : b
+        );
+
+        const overTarget = buildings.filter(
+            building => building.consumption > building.target
+        );
+
+        document.getElementById("total").textContent =
+            total + " kWh";
+
+        document.getElementById("highest").textContent =
+            highest.consumption + " kWh";
+
+        document.getElementById("highestName").textContent =
+            highest.name;
+
+        document.getElementById("overCount").textContent =
+            overTarget.length;
+
+        document.getElementById("buildingList").innerHTML =
+            buildings.map(building => {
+                const percentage = Math.min(
+                    100,
+                    building.consumption / building.target * 100
+                );
+
+                const exceeds = building.consumption > building.target;
+
+                return `
+                    <div class="building">
+                        <div class="building-header">
+                            <span>${building.name}</span>
+                            <span>${building.consumption} kWh</span>
+                        </div>
+
+                        <div class="bar">
+                            <div class="fill ${exceeds ? "over" : ""}"
+                                 style="width:${percentage}%"></div>
+                        </div>
+
+                        <div class="details">
+                            <span>Target: ${building.target} kWh</span>
+                            <span>
+                                ${exceeds
+                                    ? (building.consumption - building.target)
+                                      + " kWh over target"
+                                    : (building.target - building.consumption)
+                                      + " kWh below target"}
+                            </span>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+
+        document.getElementById("alerts").innerHTML =
+            overTarget.length
+                ? overTarget.map(building => `
+                    <div class="alert">
+                        <strong>${building.name}</strong><br>
+                        Consumption exceeds the target by
+                        ${building.consumption - building.target} kWh.
+                    </div>
+                `).join("")
+                : `<div class="alert success">All buildings are within their targets.</div>`;
+    </script>
+</body>
+</html>
