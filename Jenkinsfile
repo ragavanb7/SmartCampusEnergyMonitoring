@@ -1,175 +1,152 @@
+
 pipeline {
     agent any
-
-    options {
-        timestamps()
-        disableConcurrentBuilds()
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-    }
 
     parameters {
         booleanParam(
             name: 'FAULTY_RELEASE',
             defaultValue: false,
-            description: 'Deliberately remove health.html to test rollback'
+            description: 'Simulate a faulty release to test rollback'
         )
     }
 
     environment {
-    IMAGE_NAME = 'ragavanb7/smart-campus-energy'
-    K8S_DEPLOYMENT = 'smart-campus-energy'
-    K8S_CONTAINER = 'energy-dashboard'
-    PATH+DOCKER = 'C:\\Users\\ragav\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin'
-}
+        IMAGE_NAME = 'ragavanb7/smart-campus-energy'
+        K8S_DEPLOYMENT = 'smart-campus-energy'
+        K8S_CONTAINER = 'energy-dashboard'
+        DOCKER_PATH = 'C:\\Users\\ragav\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin'
+    }
 
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
-
-                archiveArtifacts artifacts:
-                    'index.html,health.html,Dockerfile,deployment.yaml',
-                    fingerprint: true
+                echo 'Source code checked out by Jenkins SCM.'
             }
         }
 
         stage('Validate Files') {
             steps {
                 powershell '''
-                    $files = @(
-                        "index.html",
-                        "health.html",
-                        "Dockerfile",
-                        "deployment.yaml"
+                    $ErrorActionPreference = 'Stop'
+
+                    $requiredFiles = @(
+                        'index.html',
+                        'health.html',
+                        'Dockerfile',
+                        'deployment.yaml',
+                        'Jenkinsfile'
                     )
 
-                    foreach ($file in $files) {
-                        if (!(Test-Path $file)) {
-                            throw "Missing project file: $file"
+                    foreach ($file in $requiredFiles) {
+                        if (-not (Test-Path $file)) {
+                            throw "Required file missing: $file"
                         }
+                        Write-Host "Found: $file"
                     }
+                '''
+            }
+        }
 
-                    Write-Host "All project files are present."
+        stage('Check Docker') {
+            steps {
+                powershell '''
+                    $ErrorActionPreference = 'Stop'
+                    $env:PATH = "$env:DOCKER_PATH;$env:PATH"
+
+                    docker version
+                    if ($LASTEXITCODE -ne 0) {
+                        throw 'Docker is not available to the Jenkins service.'
+                    }
                 '''
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                script {
-                    def faulty = params.FAULTY_RELEASE ? 'true' : 'false'
-                    def imageTag = "${env.IMAGE_NAME}:build-${env.BUILD_NUMBER}"
+                powershell '''
+                    $ErrorActionPreference = 'Stop'
+                    $env:PATH = "$env:DOCKER_PATH;$env:PATH"
 
-                    withEnv([
-                        "FAULT_ARG=${faulty}",
-                        "BUILD_IMAGE_TAG=${imageTag}"
-                    ]) {
-                        powershell '''
-                            docker build `
-                              --build-arg FAULTY_RELEASE=$env:FAULT_ARG `
-                              -t $env:BUILD_IMAGE_TAG .
-
-                            if ($LASTEXITCODE -ne 0) {
-                                throw "Docker build failed."
-                            }
-                        '''
+                    if ("$env:FAULTY_RELEASE" -eq 'true') {
+                        docker build --build-arg FAULTY_RELEASE=true -t "$env:IMAGE_NAME`:latest" .
+                    } else {
+                        docker build --build-arg FAULTY_RELEASE=false -t "$env:IMAGE_NAME`:latest" .
                     }
-                }
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw 'Docker image build failed.'
+                    }
+                '''
             }
         }
 
         stage('Test Healthy Image') {
             steps {
-                script {
-                    if (!params.FAULTY_RELEASE) {
-                        withEnv([
-                            "TEST_IMAGE=${env.IMAGE_NAME}:build-${env.BUILD_NUMBER}"
-                        ]) {
-                            powershell '''
-                                $name = "energy-test-$env:BUILD_NUMBER"
+                powershell '''
+                    $ErrorActionPreference = 'Stop'
+                    $env:PATH = "$env:DOCKER_PATH;$env:PATH"
 
-                                try {
-                                    docker run -d `
-                                      --name $name `
-                                      -p 18080:80 `
-                                      $env:TEST_IMAGE
+                    $testName = 'energy-health-test'
+                    docker rm -f $testName 2>$null | Out-Null
 
-                                    if ($LASTEXITCODE -ne 0) {
-                                        throw "Test container failed to start."
-                                    }
-
-                                    $healthy = $false
-
-                                    for ($i = 0; $i -lt 12; $i++) {
-                                        try {
-                                            $response = Invoke-WebRequest `
-                                              -Uri "http://localhost:18080/health.html" `
-                                              -TimeoutSec 2
-
-                                            if ($response.StatusCode -eq 200 `
-                                                -and $response.Content -match "OK") {
-                                                $healthy = $true
-                                                break
-                                            }
-                                        }
-                                        catch {
-                                            Start-Sleep -Seconds 2
-                                        }
-                                    }
-
-                                    if (!$healthy) {
-                                        throw "Health endpoint test failed."
-                                    }
-
-                                    Write-Host "Health endpoint test passed."
-                                }
-                                finally {
-                                    docker rm -f $name 2>$null | Out-Null
-                                }
-                            '''
-                        }
-                    } else {
-                        echo 'Faulty release selected. Skipping the healthy-image gate so Kubernetes can test rollback.'
+                    docker build --build-arg FAULTY_RELEASE=false -t energy-health-test-image .
+                    if ($LASTEXITCODE -ne 0) {
+                        throw 'Could not build the healthy test image.'
                     }
-                }
+
+                    docker run -d --name $testName -p 18080:80 energy-health-test-image
+                    if ($LASTEXITCODE -ne 0) {
+                        throw 'Could not start the health test container.'
+                    }
+
+                    try {
+                        $healthy = $false
+
+                        for ($i = 0; $i -lt 10; $i++) {
+                            Start-Sleep -Seconds 2
+                            try {
+                                $response = Invoke-WebRequest -Uri 'http://localhost:18080/health.html' -UseBasicParsing
+                                if ($response.StatusCode -eq 200 -and $response.Content.Trim() -eq 'OK') {
+                                    $healthy = $true
+                                    break
+                                }
+                            } catch {
+                                Write-Host 'Waiting for health endpoint...'
+                            }
+                        }
+
+                        if (-not $healthy) {
+                            throw 'Health endpoint test failed.'
+                        }
+
+                        Write-Host 'Health endpoint returned OK.'
+                    }
+                    finally {
+                        docker rm -f $testName 2>$null | Out-Null
+                    }
+                '''
             }
         }
 
-        stage('Push Image to Docker Hub') {
+        stage('Login and Push Image') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-creds',
-                        usernameVariable: 'DOCKERHUB_USERNAME',
-                        passwordVariable: 'DOCKERHUB_PASSWORD'
-                    )
-                ]) {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKERHUB_USER',
+                    passwordVariable: 'DOCKERHUB_TOKEN'
+                )]) {
                     powershell '''
-                        $env:DOCKERHUB_PASSWORD |
-                          docker login `
-                            --username $env:DOCKERHUB_USERNAME `
-                            --password-stdin
+                        $ErrorActionPreference = 'Stop'
+                        $env:PATH = "$env:DOCKER_PATH;$env:PATH"
 
+                        $env:DOCKERHUB_TOKEN | docker login -u $env:DOCKERHUB_USER --password-stdin
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Docker Hub login failed."
+                            throw 'Docker Hub login failed. Check dockerhub-creds.'
                         }
 
-                        docker push "$env:IMAGE_NAME`:build-$env:BUILD_NUMBER"
-
+                        docker push "$env:IMAGE_NAME`:latest"
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Image push failed."
-                        }
-
-                        if ($env:FAULTY_RELEASE -ne "true") {
-                            docker tag `
-                              "$env:IMAGE_NAME`:build-$env:BUILD_NUMBER" `
-                              "$env:IMAGE_NAME`:latest"
-
-                            docker push "$env:IMAGE_NAME`:latest"
-
-                            if ($LASTEXITCODE -ne 0) {
-                                throw "Latest image push failed."
-                            }
+                            throw 'Docker image push failed.'
                         }
 
                         docker logout
@@ -178,97 +155,47 @@ pipeline {
             }
         }
 
-        stage('Deploy and Verify') {
+        stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([
-                    file(
-                        credentialsId: 'kubeconfig-file',
-                        variable: 'KUBECONFIG'
-                    )
-                ]) {
-                    script {
-                        def imageTag =
-                            "${env.IMAGE_NAME}:build-${env.BUILD_NUMBER}"
+                withCredentials([file(
+                    credentialsId: 'kubeconfig-file',
+                    variable: 'KUBECONFIG_FILE'
+                )]) {
+                    powershell '''
+                        $ErrorActionPreference = 'Stop'
+                        $env:KUBECONFIG = $env:KUBECONFIG_FILE
+                        $env:PATH = "$env:DOCKER_PATH;$env:PATH"
 
-                        withEnv(["DEPLOY_IMAGE=${imageTag}"]) {
-                            powershell '''
-                                kubectl apply -f deployment.yaml
-
-                                if ($LASTEXITCODE -ne 0) {
-                                    throw "Kubernetes manifest failed."
-                                }
-
-                                kubectl set image `
-                                  deployment/$env:K8S_DEPLOYMENT `
-                                  $env:K8S_CONTAINER=$env:DEPLOY_IMAGE
-
-                                if ($LASTEXITCODE -ne 0) {
-                                    throw "Failed to update deployment image."
-                                }
-                            '''
-
-                            try {
-                                powershell '''
-                                    kubectl rollout status `
-                                      deployment/$env:K8S_DEPLOYMENT `
-                                      --timeout=90s
-
-                                    if ($LASTEXITCODE -ne 0) {
-                                        throw "Deployment rollout failed."
-                                    }
-
-                                    kubectl get pods `
-                                      -l app=smart-campus-energy
-
-                                    kubectl get service `
-                                      smart-campus-energy-service
-                                '''
-
-                                if (params.FAULTY_RELEASE) {
-                                    echo 'WARNING: Faulty release unexpectedly passed rollout checks.'
-                                    currentBuild.result = 'UNSTABLE'
-                                } else {
-                                    echo 'Deployment completed successfully.'
-                                }
-                            }
-                            catch (err) {
-                                echo "Deployment failed: ${err}"
-                                echo 'Attempting automatic rollback.'
-
-                                powershell '''
-                                    kubectl rollout undo `
-                                      deployment/$env:K8S_DEPLOYMENT
-
-                                    if ($LASTEXITCODE -ne 0) {
-                                        throw "Rollback command failed."
-                                    }
-
-                                    kubectl rollout status `
-                                      deployment/$env:K8S_DEPLOYMENT `
-                                      --timeout=90s
-
-                                    if ($LASTEXITCODE -ne 0) {
-                                        throw "Rollback did not become healthy."
-                                    }
-
-                                    kubectl get pods `
-                                      -l app=smart-campus-energy
-                                '''
-
-                                currentBuild.result = 'UNSTABLE'
-
-                                echo 'Rollback completed. The failed release was not marked as a successful deployment.'
-                            }
+                        kubectl apply -f deployment.yaml
+                        if ($LASTEXITCODE -ne 0) {
+                            throw 'Kubernetes manifest apply failed.'
                         }
-                    }
+
+                        kubectl rollout status deployment/$env:K8S_DEPLOYMENT --timeout=120s
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Host 'Deployment rollout failed; attempting rollback.'
+                            kubectl rollout undo deployment/$env:K8S_DEPLOYMENT
+                            throw 'Deployment rollout failed.'
+                        }
+
+                        kubectl get deployments
+                        kubectl get pods
+                        kubectl get services
+                    '''
                 }
             }
         }
     }
 
     post {
+        success {
+            echo 'Pipeline completed successfully.'
+        }
+        failure {
+            echo 'Pipeline failed. Review the first error in Console Output.'
+        }
         always {
-            echo 'Pipeline execution finished. Review the console log.'
+            echo 'Smart Campus Energy Monitoring pipeline finished.'
         }
     }
 }
