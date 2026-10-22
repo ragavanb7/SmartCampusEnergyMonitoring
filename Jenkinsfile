@@ -16,10 +16,12 @@ pipeline {
     }
 
     environment {
-        IMAGE_NAME = 'ragavanb7/smart-campus-energy'
-        K8S_DEPLOYMENT = 'smart-campus-energy'
-        K8S_CONTAINER = 'energy-dashboard'
-    }
+    IMAGE_NAME = 'ragavanb7/smart-campus-energy'
+    K8S_DEPLOYMENT = 'smart-campus-energy'
+    K8S_CONTAINER = 'energy-dashboard'
+
+    PATH+DOCKER = 'C:\\Users\\ragav\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin'
+}
 
     stages {
         stage('Checkout') {
